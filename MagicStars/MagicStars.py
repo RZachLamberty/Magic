@@ -1,221 +1,169 @@
-########################################################################
-#                                                                      #
-#   MagicStars.py                                                      #
-#   09/07/2013                                                         #
-#                                                                      #
-#   I will scrape the Gatherer webpage to obtain the star ratings of   #
-#   cards in my library, and probably add them in as a value in the    #
-#   CSV file.  Maybe I can then port them back into MWS?               #
-#                                                                      #
-########################################################################
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-import sys
-import os
-import re
+"""
+Module: MagicStars.py
+Author: zlamberty
+Created: 2013-09-07
+
+Description:
+    I will scrape the Gatherer webpage to obtain the star ratings of cards in my
+    library, and probably add them in as a value in the CSV file.  Maybe I can
+    then port them back into MWS?
+
+Usage:
+    <usage>
+
+"""
+
+import csv
 import copy
 import itertools
-from urllib import urlopen, quote_plus
-from BeautifulSoup import BeautifulSoup
+import os
+import re
+import sys
+
+from urllib import urlopen
+from bs4 import BeautifulSoup
 
 
+# ----------------------------- #
+#   Module Constants            #
+# ----------------------------- #
 
-#----------------------------------------------------------------------#
-#                                                                      #
-#   Module Constants                                                   #
-#                                                                      #
-#----------------------------------------------------------------------#
-
-MAGIC_BASE_URL = 'http://gatherer.wizards.com/Pages/Search/Default.aspx?name=+[]'
+MAGIC_BASE_URL = 'http://gatherer.wizards.com/Pages/Search/Default.aspx?name=+[{}]'
 CSV_DATA_PATH = 'ZachLibrary_new.csv'
 CSV_DATA_PATH_UPDATED = 'ZachLibrary_updated.csv'
 
+#logger = logging.getLogger("MagicStars.py")
+#logger_conf = logging.Config(
+#    application_name="MagicStars.py",
+#    log_filename="MagicStars.py"
+#).configure()
+#
 
-#----------------------------------------------------------------------#
-#                                                                      #
-#   Module Routines                                                    #
-#                                                                      #
-#----------------------------------------------------------------------#
+# ----------------------------- #
+#   class definition            #
+# ----------------------------- #
 
 class MagicStars():
+    """ this class is designed to collect star values from community rankings on
+        the gatherer website
 
-    
-    def __init__( self ):
-        self.loadCSVData()
-    
-    
-    #
-    #   Top-level functions
-    #
-    
-    def loadCSVData( self ):
-        """
-        load the csv data we will be updating into an appropriate object
-        saved as self.cardInventory
-        """
-        with open( CSV_DATA_PATH, 'r' ) as f:
-            s = f.read()
-        
-        s = s.replace( '\r\n', '\n' )
-        s = s.split( '\n' )
-        
-        self.cardInventory = {}
-        
-        for (i, card) in enumerate( s ):
-            if i != 0:
-                firstColon = card.find( ';' )
-                name = card[ :firstColon ]
-                rest = card[ firstColon: ]
-                self.cardInventory[ name ] = rest
+    """
+    def __init__(self, fin=CSV_DATA_PATH, fout=CSV_DATA_PATH_UPDATED,
+                 url=MAGIC_BASE_URL):
+        self.fin = fin
+        self.fout = fout
+        self.url = url
+        self.load_csv_data()
 
+    def load_csv_data(self):
+        """ load the csv data we will be updating into an appropriate object
+            saved as self.cardInventory
 
-    def findAllStars( self ):
         """
-        Cycle through the cards I own and find their star rating at
-        Gatherer
+        with open(self.fin, 'r') as f:
+            self.cardInventory = list(csv.DictReader(f, delimiter=";"))
+
+    def find_all_stars(self):
+        """ Cycle through the cards I own and find their star rating at
+            Gatherer
+
         """
         for card in self.cardInventory:
-            self.findCardStar( card )
-        
-        self.updatedCSVData()
+            self.find_card_star(card)
+        self.updated_csv_data()
 
+    def find_card_star(self, card):
+        """ Open the appropriate search URL, follow it to the correct card,
+            parse it for the star rating.
 
-    def findCardStar( self, card ):
-        """
-        Open the appropriate search URL, follow it to the correct card,
-        parse it for the star rating.
         """
         try:
-            page = self.properPage( card )
-            rating = self.parseForRating( page )
-            self.addRating( card, rating )
-            print '{:<40}Rating {:<6}'.format( card, rating )
+            page = self.proper_page(card)
+            rating = self.parse_for_rating(page)
+            card['Stars'] = rating
         except ValueError:
-            self.cantFindCard( card )
-    
-    
-    def addRating( self, card, rating ):
-        """
-        Add a rating to the self.cardInventory object
-        """
-        self.cardInventory[ card ] += '";"' + rating + '"'
-    
-    
-    def cantFindCard( self, card ):
-        """
-        Indicate that we weren't able to find the proper URL, and might
-        have to do it by hand
+            self.cant_find_card(card)
+
+    def cant_find_card(self, card):
+        """ Indicate that we weren't able to find the proper URL, and might
+            have to do it by hand
+
         """
         print "Can't find the info for card " + card
-        self.addRating( card, '0.000' )
-        
+        self.add_rating(card, '0.000')
 
-    def updatedCSVData( self ):
+    def updated_csv_data(self):
+        """ Save an updated CSV data file with the star ratings included """
+        with open(self.fout, 'wb') as f:
+            c = csv.DictWriter(f, self.cardInventory[0].keys())
+            c.writeheader()
+            c.writerows(self.cardInventory)
+
+    def proper_page(self, card):
+        """ Find the proper page url and return a BeautifulSoup object we
+            can navigate
+
         """
-        Save an updated CSV data file with the star ratings included
-        """
-        s = '"Name";"Edition";"Qty";"Rarity";"Color";"Cost";"Type";"P/T";"Text";"Comment";"Stars"'
-        
-        for ( name, rest ) in self.cardInventory.iteritems():
-            s += '\r\n"' + name + rest
-        
-        with open( CSV_DATA_PATH_UPDATED, 'w' ) as f:
-            f.write( s )
-    
-    
-    #
-    #   URL navigation and parsing functions
-    #
-    
-    
-    def properPage( self, card ):
-        """
-        Find the proper page url and return a BeautifulSoup object we
-        can navigate
-        """
-        
-        urlString = self.generateURL( card )
-        searchPage = self.openSearchURL( urlString, card )
+        urlString = self.url.format(card['Name'])
+        searchPage = self.open_search_url(urlString, card)
         return searchPage
-    
-    
-    def generateURL( self, cardName ):
-        """
-        Create the text string of the URL we will open
-        """
-        
-        newString = '[' + cardName + ']'
-        
-        #   fuse cards
-        if newString.count( '/' ) != 0:
-            newString = newString.replace( '/', ']+[//]+[' )
-        
-        urlString = copy.copy( MAGIC_BASE_URL )
-        urlString = urlString.replace( '[]', newString )
-        return urlString
-    
-    
-    def openSearchURL( self, urlString, cardName ):
-        """
-        Open the URL and return a BeautifulSoup object
-        """
-        f = urlopen( urlString )
-        
-        massage = copy.copy( BeautifulSoup.MARKUP_MASSAGE )
-        # Fix broken alt text (alt='Urza's Legacy')
-        massage.extend( [ ( re.compile( r"'(Urza's.+?)'" ), lambda m: '"%s"' % m.group(1) ), ] )
-        soup = BeautifulSoup( f, markupMassage = massage )
-        
-        if self.weFoundIt( soup ):
+
+    def open_search_url(self, urlString, card):
+        """ Open the URL and return a BeautifulSoup object """
+        soup = BeautifulSoup(urlopen(urlString))
+
+        if self.we_found_it(soup):
             return soup
         else:
-            soup = self.keepLooking( soup, cardName )
-        
+            soup = self.keep_looking(soup, card)
+
         return soup
-    
-    
-    def weFoundIt( self, searchPage ):
+
+
+    def we_found_it(self, searchPage):
+        """ Check whether or not this is the correct (i.e. final) webpage """
+        return (
+            searchPage.find(
+                'span', attrs={'class': 'textRatingValue'}
+            ) != None
+        )
+
+    def keep_looking(self, searchPage, card):
+        """ Find out which of the search objects is correct (if we can) and
+            open / return the final page
+
         """
-        Check whether or not this is the correct (i.e. final) webpage
-        """
-        return searchPage.find( 'span', attrs = { 'class' : 'textRatingValue' } ) != None
-    
-    
-    def keepLooking( self, searchPage, cardName ):
-        """
-        Find out which of the search objects is correct (if we can) and
-        open / return the final page
-        """
-        
-        #   Find the list of possible cards, check to see if any are
-        #   exactly right
-        tagList = searchPage.findAll( 'a', attrs = { 'onclick' : 'return CardLinkAction(event, this, \'SameWindow\');'} )
-        
+        # Find the list of possible cards, check to see if any are
+        # exactly right
+        tagList = searchPage.findAll(
+            'a',
+            attrs={'onclick': 'return CardLinkAction(event, this, \'SameWindow\');'}
+        )
+
         for tag in tagList:
-            s = str( tag.text )
-            
-            compString = str( cardName )
-            
-            #   fuse cards
-            if compString.count( '/' ) != 0:
-                compString = compString.replace( '/', ' // ' )
-                compString += ' (' + compString[ :compString.find( ' // ' ) ] + ')'
-            
+            s = str(tag.text)
+            compString = str(card['Name'])
+
+            # fuse cards
+            if compString.count('/') != 0:
+                compString = compString.replace('/', ' // ')
+                compString += ' ({})'.format(compString[:compString.find(' // ')])
+
             if s.lower() == compString.lower():
-                urlString = str( tag.attrMap[u'href'] )
-                urlString = urlString.replace( '..', 'http://gatherer.wizards.com/Pages' )
-                return self.openSearchURL( urlString, cardName )
-        
-        with open( 'test.html', 'w' ) as f:
-            f.write( searchPage.__repr__() )
-        raise ValueError, "We got lost!"
-    
-    
-    def parseForRating( self, page ):
+                urlString = str(tag.attrs['href'])
+                urlString = urlString.replace('..', 'http://gatherer.wizards.com/Pages')
+                return self.open_search_url(urlString, card['Name'])
+
+        with open('test.html', 'w') as f:
+            f.write(searchPage.__repr__())
+        raise ValueError("We got lost!")
+
+    def parse_for_rating(self, page):
+        """ Given a BeautifulSoup object generated by proper_page, return the
+            star rating assigned by the community at Gatherer (as a string)
+
         """
-        Given a BeautifulSoup object generated by properPage, return the
-        star rating assigned by the community at Gatherer (as a string)
-        """
-        x = str( page.find( 'span', attrs = { 'class' : 'textRatingValue' }) )
-        rightCarat = x.find( '>' )
-        leftCarat = x.find( '<', rightCarat )
-        return x[ rightCarat + 1 : leftCarat ]
+        return page.find('span', attrs={'class': 'textRatingValue'}).text
