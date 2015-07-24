@@ -92,8 +92,8 @@ class MagicStars():
             have to do it by hand
 
         """
-        print "Can't find the info for card " + card
-        self.add_rating(card, '0.000')
+        print "Can't find the info for card {}".format(card['Name'])
+        card['Stars'] = '0.000'
 
     def updated_csv_data(self):
         """ Save an updated CSV data file with the star ratings included """

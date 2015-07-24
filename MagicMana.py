@@ -15,27 +15,31 @@ Usage:
 
 """
 
-import scipy
-import os
-import sys
-import pylab
 import copy
 import cPickle as pickle
-import time
 import itertools
-import advcommon.parse as argparse
-import advcommon.logging as logging
+import logging
+import logging.config
+import numpy as np
+import os
+import pandas as pd
+import pylab
+import scipy
+import sys
+import time
+import yaml
 
 
 # ----------------------------- #
 #   Module Constants            #
 # ----------------------------- #
 
+_COLORS = ['white', 'blue', 'black', 'red', 'green', 'grey']
 DECK_SIZE = 71 #45
 RED_MANA = 13
 BLUE_MANA = 13
-ANY_MANA = 2
-DTYPE = [('name', 'S10'), ('red', 'int32'), ('blue', 'int32'), ('any', 'int32'), ('total', 'int32'), ('off', 'int32'), ('def', 'int32')]
+GREY_MANA = 2
+DTYPE = [('name', 'S10'), ('red', 'int32'), ('blue', 'int32'), ('grey', 'int32'), ('total', 'int32'), ('off', 'int32'), ('def', 'int32')]
 
 DECK_FILE = 'johnDeck.txt' #deck.txt
 SAVE_FILE_BASE = 'simulation_J_' #simulation_
@@ -51,148 +55,114 @@ TEMP_CARDS = None
 TEMP_MANA = None
 
 logger = logging.getLogger("MagicMana.py")
-logger_conf = logging.Config(
-    application_name="MagicMana.py",
-    log_filename="MagicMana.py"
-).configure()
-
-
-# ----------------------------- #
-#   Main routine                #
-# ----------------------------- #
-
-def main():
-    """ docstring """
-    pass
-
-
-# ----------------------------- #
-#   Command line                #
-# ----------------------------- #
-
-def parse_args():
-    """ Take a log file from the commmand line """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-x", "--xample", help="An Example", action='store_true')
-
-    args = parser.parse_args()
-
-    logger.debug("arguments set to {}".format(vars(args)))
-
-    return args
-
-
-if __name__ == '__main__':
-
-    args = parse_args()
-
-    main()
-
-
+_LOGCONF = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), 'logging.yaml'
+)
+with open(_LOGCONF, 'rb') as f:
+    logging.config.dictConfig(yaml.load(f))
 
 
 # ----------------------------- #
 #   load decks                  #
 # ----------------------------- #
 
-def load_deck_from_text():
+def load_deck_from_text(fdeck, white=0, blue=0, black=0, red=0, green=0, grey=0):
     """ load the deck as it's laid out in the text with variable number of
-        mana
+        mana. Add in mana in accordance with the number in each color
 
     """
-    global DECK_FILE, CARDS_PLAYED_HISTORY, MANA_POOL_HISTORY, CARDS_PLAYED_2_HISTORY, MANA_POOL_2_HISTORY, RED_MANA, BLUE_MANA, ANY_MANA
-
-    CARDS_PLAYED_HISTORY = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
-    MANA_POOL_HISTORY    = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
-    CARDS_PLAYED_2_HISTORY = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
-    MANA_POOL_2_HISTORY    = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
-
-    with open(DECK_FILE, 'rb') as f:
-        s = f.read()
-
-    s = [row.split(',') for row in s.split('\n')[:-1]]
-
-    for i in range(DECK_SIZE):
-        for j in range(1, 7):
-            s[i][j] = int(s[i][j])
-
-    s = [tuple(row) for row in s]
-
-    for i in range(RED_MANA):
-        s.append(('red mana',-1,-1,-1,-1,-1,-1))
-    for i in range(BLUE_MANA):
-        s.append(('blue mana',-1,-1,-1,-1,-1,-1))
-    for i in range(ANY_MANA):
-        s.append(('any mana',-1,-1,-1,-1,-1,-1))
-
-    return scipy.array(s, dtype = DTYPE)
-
-DECK = load_deck_from_text()
+    deck = pd.read_csv(fdeck)
+    deck = pd.concat([
+        deck,
+        pd.DataFrame([{'name': 'white mana'} for i in range(white)]),
+        pd.DataFrame([{'name': 'blue mana'} for i in range(blue)]),
+        pd.DataFrame([{'name': 'black mana'} for i in range(black)]),
+        pd.DataFrame([{'name': 'red mana'} for i in range(red)]),
+        pd.DataFrame([{'name': 'green mana'} for i in range(green)])
+        pd.DataFrame([{'name': 'grey mana'} for i in range(grey)]),
+    ])
+    deck.index = range(deck.shape[0])
+    return deck
 
 
+# ----------------------------- #
+#   monte carlo hand sims       #
+# ----------------------------- #
 
-#----------------------------------------------------------------------#
-#                                                                      #
-#   Monte Carlo hand simulations                                       #
-#                                                                      #
-#----------------------------------------------------------------------#
-
-def fullMonte():
-    """
-    Yurp
-    """
-    global DECK, RED_MANA, BLUE_MANA, ANY_MANA, NUMBER_OF_GAMES
-
+def full_monte(fdeck, manaRange, numGames):
+    """ Yurp """
     i = 1
-    for RED_MANA in range(LOW_MANA_NUM, HIGH_MANA_NUM + 1):
-        for BLUE_MANA in range(LOW_MANA_NUM, HIGH_MANA_NUM + 1):
-            DECK = load_deck_from_text()
-            print "****  game " + str(i)
-            i += 1
-            handSimulations()
-            wrapUpSimulation()
+    for (white, blue, black, red, green, grey) in mana_options(manaRange):
+        logger.info("Simulating game with the following mana pool:")
+        logger.debug("white: {}".format(white))
+        logger.debug("blue:  {}".format(blue))
+        logger.debug("black: {}".format(black))
+        logger.debug("red:   {}".format(red))
+        logger.debug("green: {}".format(green))
+        logger.debug("grey:  {}".format(green))
+        deck = load_deck_from_text(fdeck, white, blue, black, red, green, grey)
+        hand_simulations(numGames, deck)
+        wrap_up_simulations()
 
 
-def handSimulations():
+def mana_options(manaRange={'red': (9, 13), 'blue': (9, 13), 'grey': (0, 3)}):
+    """ create an iterable which covers all options of the five colors given a
+        dict with color: (low, high) bound key/vals
+
     """
-    Given the hand in DECK_FILE, simulate NUMBER_OF_GAMES independent
-    shuffled hands.  Use each to determine how many cards could be
-    played given the mana drawn up to that point.
+    return itertools.product(
+        range(*manaRange.get('white', (0, 1))),
+        range(*manaRange.get('blue', (0, 1))),
+        range(*manaRange.get('black', (0, 1))),
+        range(*manaRange.get('red', (0, 1))),
+        range(*manaRange.get('green', (0, 1))),
+        range(*manaRange.get('grey', (0, 1))),
+    )
+
+
+def hand_simulations(numGames, deck):
+    """ Given the hand in deck, simulate NUMBER_OF_GAMES independent
+        shuffled hands. Use each to determine how many cards could be
+        played given the mana drawn up to that point.
+
     """
-    for gameIndex in range(NUMBER_OF_GAMES):
+    for gameIndex in range(numGames):
         if gameIndex % 100 == 0:
-            print float(gameIndex) / NUMBER_OF_GAMES
-        shuffleHand()
-        simulateGame()
+            logger.info("{:>6.2f}% of games finished".format(
+                100.0 * float(gameIndex) / numGames
+            ))
+        deck = shuffle(deck)
+        simulate_game(deck)
 
 
-def shuffleHand():
+def shuffle(deck):
+    return deck.reindex(np.random.permutation(deck.index))
+
+
+def simulate_game(deck):
+    """ Given the shuffled deck, simulate the draw. At each step, put in a mana
+        if there is one and play any cards we can with all of the mana in our
+        pool. Obviously this is imperfect, but it'll give a good idea of how
+        many non-mana cards we can get out at a given round for an average
+        draw.
+
     """
-    Shufle the deck
-    """
-    scipy.random.shuffle(DECK)
+    currentHand = deck.head(7)
+    manaPool = {c: 0 for c in _COLORS}
 
+    wipe_temp_deck()
 
-def simulateGame():
-    """
-    Given the shuffled deck, simulate the draw.  At each step, put in
-    a mana if there is one and play any cards we can with all of the
-    mana in our pool.  Obviously this is imperfect, but it'll give a
-    good idea of how many non-mana cards we can get out at a given round
-    for an average draw.
-    """
-    currentHand = list(DECK[:7])
-    manaPool = {'red' : 0, 'blue' : 0, 'any' : 0}
-
-    wipeTempDeck()
-
-    for i in range(7, len(DECK)):
-        #print '****  round ' + str(i - 7) + '  ****'
-        drawCard(currentHand, i)
-        playMana(currentHand, manaPool, i)
+    for i in range(7, len(deck)):
+        currentHand = draw_card(currentHand, deck.iloc[i])
+        currentHand = play_mana(currentHand, manaPool, i)
         playCards(currentHand, manaPool, i)
 
     updateFromTempDeck()
+
+
+def draw_card(currentHand, card):
+    """ Draw a card and add it to your hand """
+    return currentHand.append(card)
 
 
 def wrapUpSimulation():
@@ -209,13 +179,11 @@ def wrapUpSimulation():
 
 
 #   Utilities   -------------------------------------------------------#
-def wipeTempDeck():
-    """
-    Clear out the global variables TEMP_*
-    """
+def wipe_temp_deck():
+    """ Clear out the global variables TEMP_* """
     global TEMP_MANA, TEMP_CARDS
-    TEMP_MANA = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
-    TEMP_CARDS = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + ANY_MANA)
+    TEMP_MANA = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + GREY_MANA)
+    TEMP_CARDS = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + GREY_MANA)
 
 
 def updateFromTempDeck():
@@ -235,66 +203,48 @@ def updateFromTempDeck():
     CARDS_PLAYED_2_HISTORY += TEMP_CARDS**2
 
 
-#   Draw Card   -------------------------------------------------------#
+# ----------------------------- #
+#   mana functions              #
+# ----------------------------- #
 
-def drawCard(currentHand, i):
+def play_mana(currentHand, manaPool, i):
+    """ Add mana from your hand if you can (check to make sure you're playing
+        the right mana color)
+
     """
-    Draw a card and add it to your hand
-    """
-    currentHand.append(DECK[i])
-    #currentHand = sorted(currentHand, key = lambda x : x[4])
+    # Calculate the mana in the hand
+    manaInHand = mana_from_hand(currentHand)
 
-
-#   Play Mana   -------------------------------------------------------#
-
-def playMana(currentHand, manaPool, i):
-    """
-    Add mana from your hand if you can (check to make sure you're
-    playing the right mana color)
-    """
-
-    #   Calculate the mana in the hand
-    manaInHand = manaFromHand(currentHand)
-
-    #   Pick one and play it
-    manaColor = chooseMana(currentHand, manaPool, manaInHand)
+    # Pick one and play it
+    manaColor = choose_mana(currentHand, manaPool, manaInHand)
     castMana(currentHand, manaPool, manaColor, i)
 
 
-def manaFromHand(currentHand):
+def mana_from_hand(currentHand):
+    """ Calculate the mana in the current hand and return a dic of it """
+    manaCount = currentHand.loc[currentHand.total.isnull(), 'name']
+    manaCount = manaCount.value_counts()
+    return {
+        manaKey.replace(' mana', ''): ct
+        for (manaKey, ct) in manaCount.iteritems()
+    }
+
+
+def choose_mana(currentHand, manaPool, manaInHand):
+    """ Calculate the net weight of the mana in my current hand based on the
+        non-mana cards in that hand
+
     """
-    Calculate the mana in the current hand and return a dic of it
-    """
-    manaInHand = {}
-
-    manaSet = [card[0][:card[0].find(' ')] for card in currentHand if card[0].find('mana') != -1]
-
-    for color in ['blue', 'red', 'any']:
-        n = manaSet.count(color)
-        if n != 0:
-            manaInHand[color] = n
-
-    return manaInHand
-
-
-def chooseMana(currentHand, manaPool, manaInHand):
-    """
-    Calculate the net weight of the mana in my current hand based on the
-    non-mana cards in that hand
-    """
-
-    #   Is there any mana at all, only one, or more than one?
+    # Is there any mana at all, only one, or more than one?
     if len(manaInHand) == 0:
         manaColor = None
-
     elif len(manaInHand) == 1:
         manaColor = manaInHand.keys()[0]
-
     else:
-        if 'any' in manaInHand:
-            manaColor = 'any'
+        if 'grey' in manaInHand:
+            manaColor = 'grey'
         else:
-            manaWeights = manaColorWeight(currentHand, manaPool)
+            manaWeights = mana_color_weight(currentHand, manaPool)
 
             if manaWeights['red'] >= manaWeights['blue']:
                 manaColor = 'red'
@@ -304,12 +254,12 @@ def chooseMana(currentHand, manaPool, manaInHand):
     return manaColor
 
 
-def manaColorWeight(currentHand, manaPool):
+def mana_color_weight(currentHand, manaPool):
+    """ Return a dictionary of the weights associated with colors in the mana
+        pool
+
     """
-    Return a dictionary of the weights associated with colors in the
-    mana pool
-    """
-    RED, BLUE, ANY = 1, 2, 3
+    RED, BLUE, GREY = 1, 2, 3
 
     cardCosts = {}
     maxTotal = 0
@@ -319,7 +269,7 @@ def manaColorWeight(currentHand, manaPool):
         if cardName.find('mana') == -1:
             cardCosts[cardName] = [max(0, card[RED ] - manaPool['red' ]), \
                                       max(0, card[BLUE] - manaPool['blue']), \
-                                      max(0, card[ANY ] - manaPool['any' ]) ]
+                                      max(0, card[GREY ] - manaPool['grey' ]) ]
             tot = scipy.sum(cardCosts[cardName])
             cardCosts[cardName].append(tot)
             maxTotal = max(tot, maxTotal)
@@ -433,7 +383,7 @@ def canPlay(combo, manaPool):
     """
     TOTAL_RED = manaPool['red']
     TOTAL_BLUE = manaPool['blue']
-    EXTRA = manaPool['any']
+    EXTRA = manaPool['grey']
     TOTAL = TOTAL_RED + TOTAL_BLUE + EXTRA
 
     comboCost = scipy.sum([list(card)[1 : 4] for card in combo], axis = 0)
@@ -533,8 +483,8 @@ def bestHand(johnTrial = False):
     For every number of steps, determine the sum difference through that
     round in number of cards or amount of mana available.
     """
-    global HIGH_MANA_NUM, HIGH_MANA_NUM, ANY_MANA, DECK_SIZE
-    N = HIGH_MANA_NUM + HIGH_MANA_NUM + ANY_MANA + DECK_SIZE
+    global HIGH_MANA_NUM, HIGH_MANA_NUM, GREY_MANA, DECK_SIZE
+    N = HIGH_MANA_NUM + HIGH_MANA_NUM + GREY_MANA + DECK_SIZE
     x = comparisonDic(johnTrial)
     keyList = sorted(x.keys())
     L = len(keyList)
@@ -577,3 +527,35 @@ def cumulativeBestHand(johnTrial = False):
                 intDelX[key][j][0] = scipy.cumsum(delX[key][j][0])
 
     return intDelX
+
+
+# ----------------------------- #
+#   Main routine                #
+# ----------------------------- #
+
+def main():
+    """ docstring """
+    pass
+
+
+# ----------------------------- #
+#   Command line                #
+# ----------------------------- #
+
+def parse_args():
+    """ Take a log file from the commmand line """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-x", "--xample", help="An Example", action='store_true')
+
+    args = parser.parse_args()
+
+    logger.debug("arguments set to {}".format(vars(args)))
+
+    return args
+
+
+if __name__ == '__main__':
+
+    args = parse_args()
+
+    main()
