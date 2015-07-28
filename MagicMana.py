@@ -29,35 +29,18 @@ import sys
 import time
 import yaml
 
+from constants import _COLORS, _MANA_TYPES
+from MagicHistory import History
+from math import isnan
+
 
 # ----------------------------- #
 #   Module Constants            #
 # ----------------------------- #
 
-_COLORS = ['white', 'blue', 'black', 'red', 'green', 'grey']
-DECK_SIZE = 71 #45
-RED_MANA = 13
-BLUE_MANA = 13
-GREY_MANA = 2
-DTYPE = [('name', 'S10'), ('red', 'int32'), ('blue', 'int32'), ('grey', 'int32'), ('total', 'int32'), ('off', 'int32'), ('def', 'int32')]
-
-DECK_FILE = 'johnDeck.txt' #deck.txt
-SAVE_FILE_BASE = 'simulation_J_' #simulation_
-LOW_MANA_NUM = 9 #11
-HIGH_MANA_NUM = 12 #15
-
-NUMBER_OF_GAMES = 10
-CARDS_PLAYED_HISTORY = None
-MANA_POOL_HISTORY = None
-CARDS_PLAYED_2_HISTORY = None
-MANA_POOL_2_HISTORY = None
-TEMP_CARDS = None
-TEMP_MANA = None
-
 logger = logging.getLogger("MagicMana.py")
-_LOGCONF = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), 'logging.yaml'
-)
+_HERE = os.path.dirname(os.path.realpath(__file__))
+_LOGCONF = os.path.join(_HERE, 'logging.yaml')
 with open(_LOGCONF, 'rb') as f:
     logging.config.dictConfig(yaml.load(f))
 
@@ -66,80 +49,112 @@ with open(_LOGCONF, 'rb') as f:
 #   load decks                  #
 # ----------------------------- #
 
-def load_deck_from_text(fdeck, white=0, blue=0, black=0, red=0, green=0, grey=0):
+def load_deck_from_text(fdeck):
     """ load the deck as it's laid out in the text with variable number of
         mana. Add in mana in accordance with the number in each color
 
     """
-    deck = pd.read_csv(fdeck)
+    return pd.read_csv(fdeck)
+
+
+def add_mana(deck, white=0, blue=0, black=0, red=0, green=0, colorless=0):
     deck = pd.concat([
         deck,
         pd.DataFrame([{'name': 'white mana'} for i in range(white)]),
         pd.DataFrame([{'name': 'blue mana'} for i in range(blue)]),
         pd.DataFrame([{'name': 'black mana'} for i in range(black)]),
         pd.DataFrame([{'name': 'red mana'} for i in range(red)]),
-        pd.DataFrame([{'name': 'green mana'} for i in range(green)])
-        pd.DataFrame([{'name': 'grey mana'} for i in range(grey)]),
+        pd.DataFrame([{'name': 'green mana'} for i in range(green)]),
+        pd.DataFrame([{'name': 'colorless mana'} for i in range(colorless)]),
     ])
     deck.index = range(deck.shape[0])
     return deck
 
 
 # ----------------------------- #
+#   configuring simulations     #
+# ----------------------------- #
+
+def load_configs(fyaml):
+    """ yaml config file for all parameters """
+    with open(fyaml, 'rb') as f:
+        return yaml.load(f)
+
+
+def hist_file_from_yaml(fyaml):
+    yamlbase = os.path.splitext(os.path.basename(fyaml))[0]
+    return os.path.join(_HERE, 'data', '{}.pkl'.format(yamlbase))
+
+
+# ----------------------------- #
 #   monte carlo hand sims       #
 # ----------------------------- #
 
-def full_monte(fdeck, manaRange, numGames):
+def run_simulation_from_yaml(fyaml):
+    """ load the parameters of the simulation from the yaml and run """
+    params = load_configs(fyaml)
+
+    # all params values except seed can go straight into full_monte
+    seed = params.pop('seed')
+    np.random.seed(seed)
+    history = full_monte(**params)
+    history.save(hist_file_from_yaml(fyaml))
+
+
+def full_monte(fdeck, manaRange, numGames, roundCutoff=None):
     """ Yurp """
     i = 1
-    for (white, blue, black, red, green, grey) in mana_options(manaRange):
+    nomanadeck = load_deck_from_text(fdeck)
+    history = History(numGames)
+    mo = mana_options(manaRange)
+    for (deckNum, (white, blue, black, red, green, colorless)) in mo:
         logger.info("Simulating game with the following mana pool:")
-        logger.debug("white: {}".format(white))
-        logger.debug("blue:  {}".format(blue))
-        logger.debug("black: {}".format(black))
-        logger.debug("red:   {}".format(red))
-        logger.debug("green: {}".format(green))
-        logger.debug("grey:  {}".format(green))
-        deck = load_deck_from_text(fdeck, white, blue, black, red, green, grey)
-        hand_simulations(numGames, deck)
-        wrap_up_simulations()
+        logger.debug("white:     {}".format(white))
+        logger.debug("blue:      {}".format(blue))
+        logger.debug("black:     {}".format(black))
+        logger.debug("red:       {}".format(red))
+        logger.debug("green:     {}".format(green))
+        logger.debug("colorless: {}".format(colorless))
+        deck = add_mana(
+            nomanadeck.copy(),
+            white, blue, black, red, green, colorless
+        )
+        history.register_deck(deckNum, deck)
+        simulate_games(numGames, deck, history, roundCutoff)
+
+    #wrap_up_simulations()
+    return history
 
 
-def mana_options(manaRange={'red': (9, 13), 'blue': (9, 13), 'grey': (0, 3)}):
-    """ create an iterable which covers all options of the five colors given a
-        dict with color: (low, high) bound key/vals
-
-    """
-    return itertools.product(
-        range(*manaRange.get('white', (0, 1))),
-        range(*manaRange.get('blue', (0, 1))),
-        range(*manaRange.get('black', (0, 1))),
-        range(*manaRange.get('red', (0, 1))),
-        range(*manaRange.get('green', (0, 1))),
-        range(*manaRange.get('grey', (0, 1))),
-    )
-
-
-def hand_simulations(numGames, deck):
-    """ Given the hand in deck, simulate NUMBER_OF_GAMES independent
-        shuffled hands. Use each to determine how many cards could be
-        played given the mana drawn up to that point.
+def simulate_games(numGames, deck, history, roundCutoff=None):
+    """ Given a deck, simulate NUMBER_OF_GAMES independent games. Start each
+        by shuffelling, and play through the entire deck. Determine how many
+        cards could be played given the mana drawn up to that point.
 
     """
     for gameIndex in range(numGames):
-        if gameIndex % 100 == 0:
-            logger.info("{:>6.2f}% of games finished".format(
-                100.0 * float(gameIndex) / numGames
-            ))
+        progress_bar(gameIndex, numGames)
         deck = shuffle(deck)
-        simulate_game(deck)
+        history.register_game(gameIndex)
+        simulate_game(deck, history, roundCutoff)
+
+
+def progress_bar(gameIndex, numGames):
+    # 5% of games
+    fivep = int(float(numGames) / 20)
+    if fivep == 0 or gameIndex % fivep == 0:
+        logger.info("{:>6.2f}% of games finished ({}/{})".format(
+            100.0 * float(gameIndex) / numGames,
+            gameIndex,
+            numGames
+        ))
 
 
 def shuffle(deck):
     return deck.reindex(np.random.permutation(deck.index))
 
 
-def simulate_game(deck):
+def simulate_game(deck, history, roundCutoff=None):
     """ Given the shuffled deck, simulate the draw. At each step, put in a mana
         if there is one and play any cards we can with all of the mana in our
         pool. Obviously this is imperfect, but it'll give a good idea of how
@@ -148,16 +163,17 @@ def simulate_game(deck):
 
     """
     currentHand = deck.head(7)
-    manaPool = {c: 0 for c in _COLORS}
+    manaPool = pd.DataFrame(
+        data={'num': 0.0, 'untapped': 0.0},
+        index=_MANA_TYPES
+    )
 
-    wipe_temp_deck()
-
-    for i in range(7, len(deck)):
-        currentHand = draw_card(currentHand, deck.iloc[i])
-        currentHand = play_mana(currentHand, manaPool, i)
-        playCards(currentHand, manaPool, i)
-
-    updateFromTempDeck()
+    for round in range(7, roundCutoff or len(deck)):
+        #logger.debug('round {}'.format(round - 7))
+        currentHand = draw_card(currentHand, deck.iloc[round])
+        currentHand, manaPool = play_mana(currentHand, manaPool)
+        currentHand, manaPool, playedCards = play_from_hand(currentHand, manaPool)
+        history.record_round(currentHand, manaPool, playedCards, round - 7)
 
 
 def draw_card(currentHand, card):
@@ -165,239 +181,241 @@ def draw_card(currentHand, card):
     return currentHand.append(card)
 
 
-def wrapUpSimulation():
-    """
-    do our calculations and dump the results to file
-    """
-    with open(SAVE_FILE_BASE + str(RED_MANA) + '_' + str(BLUE_MANA), 'wb') as f:
-        avMana = MANA_POOL_HISTORY / NUMBER_OF_GAMES
-        avCards = CARDS_PLAYED_HISTORY / NUMBER_OF_GAMES
-        stdMana = MANA_POOL_2_HISTORY / (NUMBER_OF_GAMES - 1) - (NUMBER_OF_GAMES / (NUMBER_OF_GAMES - 1)) * avMana**2
-        stdCards = CARDS_PLAYED_2_HISTORY / (NUMBER_OF_GAMES - 1) - (NUMBER_OF_GAMES / (NUMBER_OF_GAMES - 1)) * avCards**2
-        dumpTup = (NUMBER_OF_GAMES, avMana, stdMana, avCards, stdCards)
-        pickle.dump(dumpTup, f)
-
-
-#   Utilities   -------------------------------------------------------#
-def wipe_temp_deck():
-    """ Clear out the global variables TEMP_* """
-    global TEMP_MANA, TEMP_CARDS
-    TEMP_MANA = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + GREY_MANA)
-    TEMP_CARDS = scipy.zeros(DECK_SIZE + RED_MANA + BLUE_MANA + GREY_MANA)
-
-
-def updateFromTempDeck():
-    """
-    Use the information recorded in our temporary deck holders TEMP_*
-    to update the running average and standard deviation dictionaries
-    """
-    global MANA_POOL_HISTORY, CARDS_PLAYED_HISTORY, MANA_POOL_2_HISTORY, CARDS_PLAYED_2_HISTORY, TEMP_CARDS, TEMP_MANA
-
-    #   Make cumulative sums
-    TEMP_MANA = scipy.cumsum(TEMP_MANA)
-    TEMP_CARDS = scipy.cumsum(TEMP_CARDS)
-
-    MANA_POOL_HISTORY += TEMP_MANA
-    MANA_POOL_2_HISTORY += TEMP_MANA**2
-    CARDS_PLAYED_HISTORY += TEMP_CARDS
-    CARDS_PLAYED_2_HISTORY += TEMP_CARDS**2
-
-
 # ----------------------------- #
 #   mana functions              #
 # ----------------------------- #
 
-def play_mana(currentHand, manaPool, i):
+def mana_options(manaRange={'red': (9, 13), 'blue': (9, 13), 'colorless': (0, 3)}):
+    """ create an iterable which covers all options of the five colors given a
+        dict with color: (low, high) bound key/vals
+
+    """
+    return enumerate(itertools.product(
+        range(*manaRange.get('white', (0, 1))),
+        range(*manaRange.get('blue', (0, 1))),
+        range(*manaRange.get('black', (0, 1))),
+        range(*manaRange.get('red', (0, 1))),
+        range(*manaRange.get('green', (0, 1))),
+        range(*manaRange.get('colorless', (0, 1))),
+    ))
+
+
+def play_mana(currentHand, manaPool):
     """ Add mana from your hand if you can (check to make sure you're playing
-        the right mana color)
+        the right mana color). return the updated hand (less mana card) and
+        mana pool (plus mana color)
 
     """
     # Calculate the mana in the hand
-    manaInHand = mana_from_hand(currentHand)
+    manaInHand = mana_in_hand(currentHand)
 
     # Pick one and play it
     manaColor = choose_mana(currentHand, manaPool, manaInHand)
-    castMana(currentHand, manaPool, manaColor, i)
+
+    if manaColor is None:
+        pass
+    else:
+        mcName = '{} mana'.format(manaColor)
+        ci = currentHand[currentHand.name == mcName].index[0]
+        currentHand = currentHand.drop(ci)
+
+        manaPool.loc[manaColor, :] += 1.0
+
+    return currentHand, manaPool
 
 
-def mana_from_hand(currentHand):
-    """ Calculate the mana in the current hand and return a dic of it """
-    manaCount = currentHand.loc[currentHand.total.isnull(), 'name']
-    manaCount = manaCount.value_counts()
-    return {
-        manaKey.replace(' mana', ''): ct
-        for (manaKey, ct) in manaCount.iteritems()
-    }
+def mana_in_hand(currentHand):
+    """ Calculate the mana in the current hand and return a df of it """
+    mc = currentHand.name[currentHand.name.str.contains('mana')]
+    mc = mc.str.replace(' mana', '')
+    mc = mc.value_counts()
+    return mc
 
 
 def choose_mana(currentHand, manaPool, manaInHand):
     """ Calculate the net weight of the mana in my current hand based on the
-        non-mana cards in that hand
+        non-mana cards in that hand.
 
     """
     # Is there any mana at all, only one, or more than one?
     if len(manaInHand) == 0:
         manaColor = None
+    # if we have only one color, return one of those
     elif len(manaInHand) == 1:
         manaColor = manaInHand.keys()[0]
     else:
-        if 'grey' in manaInHand:
-            manaColor = 'grey'
-        else:
-            manaWeights = mana_color_weight(currentHand, manaPool)
-
-            if manaWeights['red'] >= manaWeights['blue']:
-                manaColor = 'red'
-            else:
-                manaColor = 'blue'
+        # we have multiple mana options. Which one gets us closest to playing a
+        # card? Note: this will always play a colored mana if one exists; if
+        # one does not then we will have been routed to the elif statement
+        # above
+        manaWeights = mana_color_weight(currentHand, manaPool)
+        manaColor = max(
+            [_ for _ in manaInHand.index if _ != 'colorless'],
+            key=lambda c: manaWeights[c]
+         )
 
     return manaColor
 
 
 def mana_color_weight(currentHand, manaPool):
-    """ Return a dictionary of the weights associated with colors in the mana
-        pool
+    """ We have some mana already in manaPool. Calculate the "net need" of each
+        mana color, given the non-mana cards in our current hand. Give
+        deference to those cards which we could cast immediately, even if the
+        mana is a color that is not what the bulk of our future casts will
+        require. Nothing special currently about what type of card we would
+        cast.
 
     """
-    RED, BLUE, GREY = 1, 2, 3
+    nonmana = currentHand[currentHand.total.notnull()]
 
     cardCosts = {}
     maxTotal = 0
 
-    for card in currentHand:
-        cardName = card[0]
-        if cardName.find('mana') == -1:
-            cardCosts[cardName] = [max(0, card[RED ] - manaPool['red' ]), \
-                                      max(0, card[BLUE] - manaPool['blue']), \
-                                      max(0, card[GREY ] - manaPool['grey' ]) ]
-            tot = scipy.sum(cardCosts[cardName])
-            cardCosts[cardName].append(tot)
-            maxTotal = max(tot, maxTotal)
+    # find the cost of each card less the current mana in manapool
+    # (so manapool should probably be a pandas df too)
+    cardcosts = nonmana.apply(func=smart_cost, axis=1, manaPool=manaPool)
 
-    redWeight, blueWeight = 0, 0
-    for (card, weights) in cardCosts.iteritems():
-        r, b, a, t = weights
-        tenP = 10**(maxTotal - t)
-        if a != 0:
-            redWeight += tenP
-            blueWeight += tenP
-        else:
-            if r != 0:
-                redWeight += tenP
-            if b != 0:
-                blueWeight += tenP
-
-    return {'red' : redWeight, 'blue' : blueWeight}
+    # weight each possible contribution by the ability of that single card to
+    # cast the card (this will be done via an inverse exponential waiting of
+    # the number of cards yet required to cast that particular spell)
+    wt = 2 ** (cardcosts.total.max() - cardcosts.total)
+    return cardcosts[_COLORS].mul(wt, axis=0).sum()
 
 
-def castMana(currentHand, manaPool, manaColor, i):
+def smart_cost(card, manaPool):
+    """ calculate the cost of the card assuming you use your mana pool """
+    manacosts = card[_MANA_TYPES][card[_MANA_TYPES] > 0]
+    tmpPool = use_mana_for_card(manacosts, manaPool.copy())
+
+    # finally, add a 'total' row so that the returned series has the total
+    # still needed as a value
+    tmpPool.loc['total'] = tmpPool.sum()
+
+    return tmpPool.needed
+
+
+# ----------------------------- #
+#   non-mana functions          #
+# ----------------------------- #
+
+def play_from_hand(currentHand, manaPool):
+    """ Play any non-mana cards you can
+
+        for each N and for each N-card combo, determine if it is playable, and
+        if so what its total offense contribution would be. For each N, retain
+        the combo with the highest offense
+
+        if there is no N = 1 playable option, just return
+
+        if we go through an entire N > 1 without a playable set, play the last
+        highest combo and return
+
     """
-    Drop the mana of color manaColor from the currentHand, and add it to
-    the manaPool
+    nonmana = currentHand[currentHand.total.notnull()]
+
+    bestComboInd = []
+    playedCards = None
+    maxOff = -float('inf')
+
+    for playableCombo in playable_combos(nonmana, manaPool):
+        cards = nonmana.loc[playableCombo]
+        offense = cards.off.sum()
+        bestOffYet = (
+            (offense > maxOff) or (maxOff == -float('inf') and isnan(offense))
+        )
+        if bestOffYet:
+            maxOff = offense
+            bestComboInd = playableCombo
+
+    if bestComboInd:
+        currentHand, manaPool, playedCards = play_combo(
+            currentHand, bestComboInd, manaPool
+        )
+
+    return currentHand, manaPool, playedCards
+
+
+def playable_combos(nonmana, manaPool):
+    """ a shell-type iterator of cards in nonmana """
+    # build / yield single card shell first
+    shell = [
+        [i] for i in nonmana.index
+        if combo_is_playable(nonmana.loc[[i]], manaPool)
+    ]
+    for x in shell:
+        yield x
+
+    # now we iterate
+    while shell:
+        newShell = []
+        for comboIndex in shell:
+            for newIndex in nonmana.index:
+                if newIndex not in comboIndex:
+                    candidate = comboIndex + [newIndex]
+                    cards = nonmana.loc[candidate]
+                    if combo_is_playable(cards, manaPool):
+                        newShell.append(candidate)
+                        yield candidate
+        shell = newShell
+
+
+def card_combinations(nonmana, n):
+    """ return an iterator of all non-repeating combo sets of n cards from
+        withing nonmana
+
     """
-    currentHandCopy = list(currentHand)
-    if manaColor == None:
-        pass
-    else:
-        notPlayed = True
-        j = 0
-        while j < len(currentHand) and notPlayed:
-            card = currentHand[j]
-            if card[0] == manaColor + ' mana':
-                currentHand.pop(j)
-                manaPool[manaColor] += 1
-                notPlayed = False
-            j += 1
-
-        if notPlayed and j == len(currentHand) + 1:
-            raise ValueError, "Mana of color " + manaColor + " didn't get played for some reason"
-
-        TEMP_MANA[i - 7] += 1
-        #raw_input('mana\n\t' + str(MANA_POOL_HISTORY[0,:]))
+    return itertools.combinations(nonmana.index, n)
 
 
+def combo_is_playable(cards, manaPool):
+    """ given a df of cards and a df of the manaPool, check to see if the cards
+        can be played collectively
 
-#   Play Cards  -------------------------------------------------------#
-
-def playCards(currentHand, manaPool, i):
     """
-    Play any cards you can
-    """
-    unspentMana = scipy.sum(manaPool.values())
-    playableCards = singlePlayableCards(currentHand, manaPool, unspentMana)
-
-    #   Walk through playable cards, play them in order
-    canPlaySet = possiblePlays(playableCards, manaPool)
-
-    if canPlaySet != [[]]:
-
-        cardsToPlay = max(canPlaySet, key = lambda x : len(x))
-
-        for card in cardsToPlay:
-            playCard(card, currentHand, i)
+    # convert to one composite card
+    compCard = cards[_MANA_TYPES].sum()
+    return is_playable(compCard, manaPool)
 
 
-def singlePlayableCards(currentHand, manaPool, unspentMana):
-    return [card for card in currentHand if card[0].find('mana') == -1 and card[1] <= manaPool['red'] and card[2] <= manaPool['blue'] and card[4] <= unspentMana]
+def is_playable(card, manaPool):
+    # the card is playable iff the needed column sums to 0 after payment
+    tmpPool = use_mana_for_card(card, manaPool.copy())
+    return tmpPool.needed.sum() == 0
 
 
-def possiblePlays(playableCards, manaPool):
-    """
-    return a list of all the collections of cards we can play given the
-    mana we have
-    """
-    canPlaySet = [[]]
-    for j in range(len(playableCards)):
-        newCanPlaySet = []
-        addedOption = False
-        for previousCombo in canPlaySet:
-            tempPlayable = [card for card in playableCards if card not in previousCombo]
+def play_combo(currentHand, indices, manaPool):
+    ind = list(indices)
+    cards = currentHand.loc[ind]
 
-            for card in tempPlayable:
-                combo = previousCombo + [card]
-                if canPlay(combo, manaPool):
-                    newCanPlaySet.append(combo)
-                    addedOption = True
-        if not addedOption:
-            break
-        else:
-            canPlaySet = newCanPlaySet
+    # spend mana
+    compCard = cards[_MANA_TYPES].sum()
+    manaPool = use_mana_for_card(compCard, manaPool)[['num', 'untapped']]
 
-    return canPlaySet
+    # put on table
+    currentHand = currentHand.drop(ind)
+
+    return currentHand, manaPool, cards
 
 
-def playCard(card, currentHand, i):
-    """
-    Play the card, indicate that we were able to play it in the global
-    variable
-    """
-    currentHand.remove(card)
-    TEMP_CARDS[i - 7] += 1
-    #raw_input('played ' + card[0] + '\n\t' + str(CARDS_PLAYED_HISTORY[0,:]))
+def use_mana_for_card(card, manaPool):
+    manaPool['needed'] = card
 
+    # tap mana color-to-color first (not just colored mana -- burn colorless
+    # mana we have on needed colorless mana)
+    totap = manaPool[['untapped', 'needed']].min(axis=1)
+    manaPool.untapped -= totap
+    manaPool.needed -= totap
 
-def canPlay(combo, manaPool):
-    """
-    See if we can play a combination of cards given the manapool we
-    currently have
-    """
-    TOTAL_RED = manaPool['red']
-    TOTAL_BLUE = manaPool['blue']
-    EXTRA = manaPool['grey']
-    TOTAL = TOTAL_RED + TOTAL_BLUE + EXTRA
-
-    comboCost = scipy.sum([list(card)[1 : 4] for card in combo], axis = 0)
-
-    comboSum = scipy.sum(comboCost)
-
-    for card in combo:
-        if (TOTAL >= comboSum):
-            if (TOTAL_RED >= comboCost[0]):
-                return (TOTAL_BLUE >= comboCost[1])
-            else:
-                return False
-        else:
-            return False
+    # remove as many colorless as are remaining; don't worry about tapping
+    notTapped = manaPool.untapped.sum()
+    totapColorless = min(notTapped, manaPool.needed.loc['colorless'])
+    manaPool.needed.loc['colorless'] -= totapColorless
+    yetToTapColorless = totapColorless
+    while yetToTapColorless:
+        firstInd = manaPool.untapped[manaPool.untapped > 0].index[0]
+        manaPool.loc[firstInd, 'untapped'] -= 1.0
+        yetToTapColorless -= 1
+    return manaPool
 
 
 #----------------------------------------------------------------------#
@@ -483,8 +501,8 @@ def bestHand(johnTrial = False):
     For every number of steps, determine the sum difference through that
     round in number of cards or amount of mana available.
     """
-    global HIGH_MANA_NUM, HIGH_MANA_NUM, GREY_MANA, DECK_SIZE
-    N = HIGH_MANA_NUM + HIGH_MANA_NUM + GREY_MANA + DECK_SIZE
+    global HIGH_MANA_NUM, HIGH_MANA_NUM, COLORLESS_MANA, DECK_SIZE
+    N = HIGH_MANA_NUM + HIGH_MANA_NUM + COLORLESS_MANA + DECK_SIZE
     x = comparisonDic(johnTrial)
     keyList = sorted(x.keys())
     L = len(keyList)

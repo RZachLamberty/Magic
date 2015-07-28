@@ -1,0 +1,8 @@
+fdeck: 'johnDeck.txt'
+manaRange:
+  blue: [10, 11]
+  red: [10, 11]
+  colorless: [2, 3]
+numGames: 2
+roundCutoff: 20
+seed: 42
