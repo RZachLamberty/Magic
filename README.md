@@ -78,4 +78,4 @@ history.num_card_summary()
 history.off_def_summary()
 ```
 
-For a fuller description of the above, please see the attached ipython notebook.
+For a fuller description of the above, please see the [attached ipython notebook](https://github.com/RZachLamberty/Magic/blob/master/magic_mana_demo.ipynb).
