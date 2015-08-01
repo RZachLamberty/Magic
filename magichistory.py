@@ -97,7 +97,7 @@ class History(object):
         manadf = self.gameState[['deck_num', 'round_num'] + _MANA_TYPES]
         manadf.loc[:, 'total'] = manadf[_MANA_TYPES].apply(np.sum, axis=1)
         grouped = manadf.groupby(['deck_num', 'round_num'])
-        av, std = self.average_per_round(key=_MANA_TYPES, df=manadf)
+        av, std = self.average_per_round(key=_MANA_TYPES + ['total'], df=manadf)
 
         color = _COLORS + ['gray', 'darkslategray', 'black']
 
