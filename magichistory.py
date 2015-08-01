@@ -39,8 +39,7 @@ logger = logging.getLogger(__name__)
 
 class History(object):
     """ this is a simple pandas df object with some utility functions """
-    def __init__(self, numGames):
-        self.numGames = numGames
+    def __init__(self):
         self.game = 0
         self.round = 0
         self.deckProfile = pd.DataFrame(
@@ -96,18 +95,19 @@ class History(object):
 
         """
         manadf = self.gameState[['deck_num', 'round_num'] + _MANA_TYPES]
-        manadf.loc[:, 'total'] = manadf[_MANA_TYPES].apply(sum, axis=1)
+        manadf.loc[:, 'total'] = manadf[_MANA_TYPES].apply(np.sum, axis=1)
         grouped = manadf.groupby(['deck_num', 'round_num'])
-        av = grouped.aggregate(np.average)
-        x = np.sqrt(len(self.gameState.game_num.unique()))
-        std = grouped.aggregate(np.std) / x
+        av, std = self.average_per_round(key=_MANA_TYPES, df=manadf)
 
-        color = _COLORS + ['lightgray', 'gray']
+        color = _COLORS + ['gray', 'darkslategray', 'black']
 
         # multi-plot, faceted by deck nums
         deckNums = manadf.deck_num.unique()
         nrows, ncols = grid_layout_dimensions(len(deckNums))
-        f, axes = plt.subplots(nrows=nrows, ncols=ncols)
+        f, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=[16, 12])
+
+        x = self.gameState.round_num.unique()
+        ymax = av.total.max()
 
         for (i, j) in itertools.product(range(nrows), range(ncols)):
             dn = deckNums[i + j * nrows]
@@ -117,13 +117,133 @@ class History(object):
             except AttributeError:
                 ax = axes
 
+            # add "ideal" mana curve as dashed line
+            plt.sca(ax)
+            plt.plot(x, x + 1, color='k', linestyle=":")
+
+            # plot colors only first
             av.loc[dn].plot(yerr=std.loc[dn], color=color, ax=ax)
 
+            # set constant range for all comparison graphs
+            ax.set_ylim(0, ymax)
+
+            # set the title
             t = self.get_deck_title(dn)
             ax.set_title(t)
 
+        f.tight_layout()
         plt.show()
         plt.close(f)
+
+    def num_card_summary(self):
+        """ similar to the mana summary, but plotting the average number of
+            cards played / cards in hand per round
+
+        """
+        avcardsplayed, acperr = self.average_per_round(key='cards_played')
+        self.gameState.loc[:, 'cards_played_cumulative'] = self.cumsum_per_game(key='cards_played')
+        cardsplayed, cperr = self.average_per_round(key='cards_played_cumulative')
+        inhand, iherr = self.average_per_round(key='cards_in_hand')
+
+        # multi-plot, faceted by deck nums
+        deckNums = self.gameState.deck_num.unique()
+        nrows, ncols = grid_layout_dimensions(len(deckNums))
+        f, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=[16, 12])
+
+        ymax = max(
+            inhand.cards_in_hand.max(),
+            cardsplayed.cards_played_cumulative.max()
+        )
+
+        for (i, j) in itertools.product(range(nrows), range(ncols)):
+            dn = deckNums[i + j * nrows]
+
+            try:
+                ax = axes[i, j] if len(axes.shape) > 1 else axes[j]
+            except AttributeError:
+                ax = axes
+
+            # bar chart of cards played per round
+            avcardsplayed.loc[dn].plot(yerr=acperr.loc[dn], ax=ax, kind='bar')
+
+            # line plot of cumulative cards played
+            cardsplayed.loc[dn].plot(yerr=cperr.loc[dn], ax=ax)
+
+            # line plot of cards in hand
+            inhand.loc[dn].plot(yerr=iherr.loc[dn], ax=ax)
+
+            # set constant range for all comparison graphs
+            ax.set_ylim(0, ymax)
+
+            # set the title
+            t = self.get_deck_title(dn)
+            ax.set_title(t)
+
+        f.tight_layout()
+        plt.show()
+        plt.close(f)
+
+    def off_def_summary(self):
+        """ similar to the num card summary, but plotting the evolution of
+            offense and defnese for played cards
+
+        """
+        self.gameState.loc[:, 'added_off_cumulative'] = self.cumsum_per_game(key='added_off')
+        self.gameState.loc[:, 'added_def_cumulative'] = self.cumsum_per_game(key='added_def')
+        offav, offerr = self.average_per_round(key='added_off_cumulative')
+        defav, deferr = self.average_per_round(key='added_def_cumulative')
+
+        # multi-plot, faceted by deck nums
+        deckNums = self.gameState.deck_num.unique()
+        nrows, ncols = grid_layout_dimensions(len(deckNums))
+        f, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=[16, 12])
+
+        ymax = max(
+            offav.added_off_cumulative.max(),
+            defav.added_def_cumulative.max()
+        )
+
+        for (i, j) in itertools.product(range(nrows), range(ncols)):
+            dn = deckNums[i + j * nrows]
+
+            try:
+                ax = axes[i, j] if len(axes.shape) > 1 else axes[j]
+            except AttributeError:
+                ax = axes
+
+            # line plot of cumulative off
+            offav.loc[dn].plot(yerr=offerr.loc[dn], ax=ax)
+
+            # line plot of cumulative def
+            defav.loc[dn].plot(yerr=deferr.loc[dn], ax=ax)
+
+            # set constant range for all comparison graphs
+            ax.set_ylim(0, ymax)
+
+            # set the title
+            t = self.get_deck_title(dn)
+            ax.set_title(t)
+
+        f.tight_layout()
+        plt.show()
+        plt.close(f)
+
+    def average_per_round(self, key, df=None):
+        if not isinstance(key, list):
+            keylist = [key]
+        else:
+            keylist = key
+        if df is None:
+            df = self.gameState
+        grouped = df.loc[:, ['deck_num', 'round_num'] + keylist]
+        grouped = grouped.groupby(['deck_num', 'round_num'])
+        x = np.sqrt(len(self.gameState.game_num.unique()))
+        return grouped.aggregate(np.average), grouped.aggregate(np.std) / x
+
+    def cumsum_per_game(self, key):
+        grouped = self.gameState.loc[:, ['deck_num', 'game_num', key]].fillna(0)
+        grouped = grouped.groupby(['deck_num', 'game_num'])
+        return grouped.cumsum()
 
     def get_deck_title(self, dn):
         dn = int(dn)
@@ -151,12 +271,10 @@ class History(object):
 
         fnames = {
             k: os.path.join(fdir, '{}.{}{}'.format(b, k, ext))
-            for k in ['num_games', 'deck_profile', 'game_state']
+            for k in ['deck_profile', 'game_state']
         }
 
         logger.debug('Saving to files: {}'.format(', '.join(fnames.values())))
-        with open(fnames['num_games'], 'wb') as f:
-            f.write('{:.0f}'.format(self.numGames))
 
         self.deckProfile.to_pickle(fnames['deck_profile'])
         self.gameState.to_pickle(fnames['game_state'])
@@ -171,15 +289,12 @@ class History(object):
 
         fnames = {
             k: os.path.join(fdir, '{}.{}{}'.format(b, k, ext))
-            for k in ['num_games', 'deck_profile', 'game_state']
+            for k in ['deck_profile', 'game_state']
         }
 
         logger.debug(
             'Loading from files: {}'.format(', '.join(fnames.values()))
         )
-        with open(fnames['num_games'], 'rb') as f:
-            self.numGames = int(f.read().strip())
-
         self.deckProfile = pd.read_pickle(fnames['deck_profile'])
         self.gameState = pd.read_pickle(fnames['game_state'])
 

@@ -1,4 +1,4 @@
-fdeck: 'johnDeck.txt'
+fdeck: 'data/johnDeck.txt'
 manaRange:
   blue: [10, 11]
   red: [10, 11]

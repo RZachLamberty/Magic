@@ -32,8 +32,9 @@ from bs4 import BeautifulSoup
 # ----------------------------- #
 
 MAGIC_BASE_URL = 'http://gatherer.wizards.com/Pages/Search/Default.aspx?name=+[{}]'
-CSV_DATA_PATH = 'ZachLibrary_new.csv'
-CSV_DATA_PATH_UPDATED = 'ZachLibrary_updated.csv'
+HERE = os.path.dirname(os.path.realpath(__file__))
+CSV_DATA_PATH = os.path.join(HERE, 'data', 'ZachLibrary_new.csv')
+CSV_DATA_PATH_UPDATED = os.path.join(HERE, 'data', 'ZachLibrary_updated.csv')
 
 #logger = logging.getLogger("MagicStars.py")
 #logger_conf = logging.Config(
@@ -167,3 +168,39 @@ class MagicStars():
 
         """
         return page.find('span', attrs={'class': 'textRatingValue'}).text
+
+
+# ----------------------------- #
+#   Command line                #
+# ----------------------------- #
+
+def parse_args():
+    """ take a csv in and an expected csv out name """
+    parser = argparse.ArgumentParser()
+
+    input = "full path of input file (should have column 'Name' within)"
+    parser.add_argument("-i", "--input", help=input, default=CSV_DATA_PATH)
+
+    output = "full path of output file (should have column 'Name' within)"
+    parser.add_argument("-o", "--output", help=output, default=CSV_DATA_PATH_UPDATED)
+
+    url = "Gatherer base url"
+    parser.add_argument("-u", "--url", help=url, default=MAGIC_BASE_URL)
+
+    args = parser.parse_args()
+
+    logger.debug("arguments set to {}".format(vars(args)))
+
+    return args
+
+
+if __name__ == '__main__':
+
+    args = parse_args()
+
+    ms = MagicStars(
+        fin=args.input,
+        fout=args.outpu,
+        url=args.url
+    )
+    ms.find_all_cards()

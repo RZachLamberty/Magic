@@ -1,7 +1,7 @@
-fdeck: 'data/johnDeck.txt'
+fdeck: 'data/deck.txt'
 manaRange:
-  blue: [10, 15]
-  red: [10, 15]
+  blue: [12, 14]
+  red: [12, 14]
   colorless: [0, 3]
 numGames: 30
 roundCutoff: 20

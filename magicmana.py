@@ -30,7 +30,7 @@ import time
 import yaml
 
 from constants import _COLORS, _MANA_TYPES
-from MagicHistory import History
+from magichistory import History
 from math import isnan
 
 
@@ -105,7 +105,7 @@ def full_monte(fdeck, manaRange, numGames, roundCutoff=None):
     """ Yurp """
     i = 1
     nomanadeck = load_deck_from_text(fdeck)
-    history = History(numGames)
+    history = History()
     mo = mana_options(manaRange)
     for (deckNum, (white, blue, black, red, green, colorless)) in mo:
         logger.info("Simulating game with the following mana pool:")
@@ -563,7 +563,9 @@ def main():
 def parse_args():
     """ Take a log file from the commmand line """
     parser = argparse.ArgumentParser()
-    parser.add_argument("-x", "--xample", help="An Example", action='store_true')
+
+    fyaml = "A yaml configuration file for a simulation to run"
+    parser.add_argument("-f", "--fyaml", help=fyaml)
 
     args = parser.parse_args()
 
@@ -576,4 +578,4 @@ if __name__ == '__main__':
 
     args = parse_args()
 
-    main()
+    run_simulation_from_yaml(fyaml=args.fyaml)
