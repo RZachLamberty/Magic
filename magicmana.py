@@ -143,8 +143,8 @@ def progress_bar(gameIndex, numGames):
     # 5% of games
     fivep = int(float(numGames) / 20)
     if fivep == 0 or gameIndex % fivep == 0:
-        logger.info("{:>6.2f}% of games finished ({}/{})".format(
-            100.0 * float(gameIndex) / numGames,
+        logger.info("{:>6.2%} of games finished ({}/{})".format(
+            float(gameIndex) / numGames,
             gameIndex,
             numGames
         ))
